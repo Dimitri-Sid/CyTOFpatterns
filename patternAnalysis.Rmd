@@ -1,0 +1,769 @@
+---
+title: "CyTOF analysis of cell states for diverse immunological applications"
+output: html_document
+---
+
+#### Load global packages / set working directory
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(pheatmap)
+library(ggpubr)
+library(corrplot)
+library(Hmisc)
+library(reshape2)
+library(viridis)
+library(geepack)
+library(mixtools)
+library(MESS)
+library(tidyr)
+library(ggplot2)
+library(tidyverse)
+library(monocle3)
+library(projectR)
+library(stringr)
+library(survival)
+library(survminer)
+library(lubridate)
+#library(dyno)
+setwd("C:/Users/sidir/OneDrive - Johns Hopkins/WON_RESEARCH/CYTOF_Metrics_Paper/figures")
+```
+
+
+#### FUNCTIONS
+```{r}
+plotCells <- function(object,marker,title,save){ # plots UMAPs or saves UMAP file
+    if(save=="yes"){
+      tiff(paste0(title," ",marker,".tiff"))
+      print(ggplot(data.frame(reducedDims(object)$UMAP),  aes(x = X1, y = X2, color = t(exprs(object))[,marker] ))+
+        geom_point(size = 1) +
+        theme_minimal()+
+        theme(panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank())+
+        scale_color_viridis(discrete = FALSE, option = "D")+
+        scale_fill_viridis(discrete = FALSE)+ggtitle(marker)+ylab("UMAP2") + xlab("UMAP1")+labs(color = "Expression"))
+      dev.off()
+    } else {
+    ggplot(data.frame(reducedDims(object)$UMAP),  aes(x = X1, y = X2, color = t(exprs(object))[,marker] ))+
+    geom_point(size = 1) +
+    theme_minimal()+
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank())+
+    scale_color_viridis(discrete = FALSE, option = "D")+
+    scale_fill_viridis(discrete = FALSE)+ggtitle(title)+ylab("UMAP2") + xlab("UMAP1")+labs(color = "Expression")
+    }
+}
+
+trajInfer <- function(object,title){ #learns pseudotime, user picks start node, saves figure
+  object <-cluster_cells(object,resolution=1e-5) 
+  object<-learn_graph(object)
+  object<-order_cells(object)
+  pData(object)$pseudotime <- pseudotime(object)
+  tiff(paste0(title,".tiff"))
+  print(plot_cells(object, color_cells_by = "pseudotime",label_cell_groups=FALSE,label_leaves=FALSE,label_branch_points=FALSE, graph_label_size=1.5))
+  dev.off()
+  pData(object)$subset <- title
+  return(object)
+}
+
+densityAUCratio <- function(data,sample){ #returns the ratios of AUCs of each pole 
+  r <- data.frame(pseudotime=density(data[data$sample_id == sample,]$pseudotime)$x,
+             density=density(data[data$sample_id == sample,]$pseudotime)$y)
+  timebins <- sort(unique(cut(r$pseudotime,breaks=2))) #two bins for two poles 
+  timebins <- gsub("]","",timebins)
+  timebins<- gsub("[()]", "", timebins)
+  timebins <- str_split(timebins, ",", simplify = TRUE)
+  return(auc(r$pseudotime, r$density,from = as.numeric(timebins[1,2]), to = max(r$pseudotime))/auc(r$pseudotime, r$density,from = min(r$pseudotime), to = as.numeric(timebins[1,2]))) #ratio indicating cell density bias 
+}
+
+plot_pseudotime_umap <- function(object,pseudotime,title){
+  ggplot(data.frame(reducedDims(object)$UMAP),  aes(x = X1, y = X2, color = as.numeric(pseudotime)))+
+  geom_point(size = 1) +
+  theme_minimal()+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  scale_color_viridis(discrete = FALSE, option = "D")+
+  scale_fill_viridis(discrete = FALSE)+ggtitle(title)+ylab("UMAP2") + xlab("UMAP1")+labs(color = "Pseudotime")
+}
+
+save_pseudotime_umap <- function(object,pseudotime,title){
+  tiff(paste0(title," ",".tiff"))
+  print(ggplot(data.frame(reducedDims(object)$UMAP),  aes(x = X1, y = X2, color = as.numeric(pseudotime)))+
+  geom_point(size = 1) +
+  theme_minimal()+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  scale_color_viridis(discrete = FALSE, option = "D")+
+  scale_fill_viridis(discrete = FALSE)+ggtitle(title)+ylab("UMAP2") + xlab("UMAP1")+labs(color = "Pseudotime"))
+  dev.off()
+}
+
+DE_model <- function(object,formula,expression_fam){
+  gene_fits <- fit_models(object, model_formula_str = formula,expression_family = expression_fam) #anything you want
+  fit_coefs <- coefficient_table(gene_fits)
+  terms <- fit_coefs %>% filter(!term == "(Intercept)") ## remove intercept rows
+  terms <- terms %>% mutate(q_value = p.adjust(p_value))
+  terms <- data.frame(terms)
+  #terms <- terms %>% filter (q_value < 0.05) 
+  remove<-which(colnames(terms) == "model_summary" | colnames(terms) == "model")
+  terms<-terms[,-c(remove)] 
+  return(terms)
+}
+
+rsq <- function (x, y) cor(x, y) ^ 2
+
+plotNMF <- function(object,pattern,title,save){ #  UMAP with NMF pattern weights overlayed 
+  if(save=="yes"){
+    tiff(paste0(title,".tiff"))
+    print(ggplot(data.frame(reducedDims(object)$UMAP),  aes(x = X1, y = X2, color = pattern))+
+      geom_point(size = 1) +
+      theme_classic()+
+      theme(panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank())+
+      scale_color_viridis(discrete = FALSE, option = "D")+
+      scale_fill_viridis(discrete = FALSE)+ggtitle(title)+ylab("UMAP2") + xlab("UMAP1")+labs(color = "Pattern Weight"))
+    dev.off()
+  } else {
+    ggplot(data.frame(reducedDims(object)$UMAP),  aes(x = X1, y = X2, color = pattern))+
+      geom_point(size = 1) +
+      theme_classic()+
+      theme(panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank())+
+      scale_color_viridis(discrete = FALSE, option = "D")+
+      scale_fill_viridis(discrete = FALSE)+ggtitle(title)+ylab("UMAP2") + xlab("UMAP1")+labs(color = "Pattern Weight")
+  }
+}
+```
+
+
+#### CDS OBJECT DATA FOR EACH ANALYSIS
+There are 5 datasets involved in this study:
+1) HIV and CD8Tcells (external) 
+2) GVAX + Ipi in PDAC (Hopkins internal)
+3) Ipi in viral and non viral HCC (Hopkins internal) 
+4) Ipi in Hodi Melanoma (external) [stimulated and unstimulated data objects]
+
+
+#### 1) HIV CD8Tcells
+```{r}
+load("./paper_CDS_objects/CD8exh.rda")
+setwd("./figures/3_HIV_analysis")
+
+hiv_cds <- cds
+rm(cds)
+
+hiv_cds <- cluster_cells(hiv_cds,resolution = 1e-1)
+pData(hiv_cds)$clusters<-clusters(hiv_cds)
+plot_cells(hiv_cds,group_cells_by = "partition", color_cells_by  = "partition")
+
+plotCells(hiv_cds,"CD3","HIV CD3 Total","yes")
+plotCells(hiv_cds,"CD4","HIV CD4 Total","yes")
+plotCells(hiv_cds,"CD8","HIV CD8 Total","yes")
+plotCells(hiv_cds,"CCR7","HIV CCR7 Total","yes")
+plotCells(hiv_cds,"CD45RA","HIV CD45RA Total","yes")
+plotCells(hiv_cds,"Helios","HIV Helios Total","yes")
+plotCells(hiv_cds,"CD45RO","HIV CD45RO Tota","yes")
+hiv_cds <- trajInfer(hiv_cds,"PDAC Tc Pseudotime")
+
+
+# plot all marker UMAPs
+setwd("./allUMAPs")
+for (marker in unique(rownames(hiv_cds))){
+  plotCells(hiv_cds,marker, marker,"yes")
+}
+
+#save pdata and pseudotimes 
+hiv_pseudotimes <- data.frame(pData(hiv_cds))
+write.table(hiv_pseudotimes,file="hiv_pseudotimes.txt")
+
+pdataTc <- read.table("metrics/hiv_pseudotimes.txt")
+pdataTc$patient_id <- as.character(pdataTc$sample_id)
+
+pdf("3_hiv_pseudotime_analysis.pdf") # plot pseudotime weights, read in as pData, only T cells here
+
+#assign colors 
+ann <- data.frame(str_split_fixed(unique(paste(pdataTc$sample_id,pdataTc$condition)), " ", 2))
+colnames(ann) <- c("sample_id","condition")
+rownames(ann) <- ann$sample_id
+ann$color <- ""
+ann[ann$condition=="Healthy",]$color <- "blue"
+ann[ann$condition=="ART",]$color <- "black"
+ann[ann$condition=="Severe",]$color <- "red"
+ann[ann$condition=="Mild",]$color <- "gray"
+ann[ann$condition=="Intermediate",]$color <- "orange"
+colors <- ann$color
+names(colors) <- ann$sample_id
+groupColors <- unique(colors)
+names(groupColors) <- unique(pdataTc$condition)
+
+ggplot(pdataTc, aes(x=condition, y=pseudotime,color=condition)) +geom_violin(trim=FALSE,fill='#A4A4A4')+stat_summary(fun.y=mean, geom="point", shape=15, size=2, color="black") + theme_minimal() + scale_color_manual(values = alpha(groupColors))+ggtitle("Tc Grouped Pseudotime Distributions")
+
+# plot pseudotime by patient by condition
+df <- aggregate(pseudotime ~ sample_id + condition + patient_id, data = pdataTc, FUN = mean)
+rownames(df) <- df$sample_id
+df$condition <- factor(df$condition, levels = c("Healthy","ART","Mild","Intermediate","Severe"))
+ggplot(df, aes(x=condition, y=pseudotime,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("Pseudotime Pattern Weight Mean")
+
+pdataTc <- cbind(pdataTc,t(as.matrix(exprs(hiv_cds))))
+### Plot overlayed fitted lines of pseudotime by expression 
+tcsmooth <- pdataTc[,c("pseudotime","Helios","TOX","PD_1","CD28")]
+tcsmooth <- melt(tcsmooth, id.vars=c("pseudotime"))
+ggplot(tcsmooth) +
+  stat_smooth(aes(y = value, x=pseudotime, color = variable))+
+    theme_classic2() + ylab("Surface Protein Expression") + xlab("Tc Pseudotime")+theme(legend.position="top") + labs(color='Markers') 
+   # scale_color_manual(name = "Markers", values = c("CCR7" = "blue", "GZMB" = "red","CD45RO" = "orange","CD45RA" = "black"))
+
+## run cogaps and combine all data together (expression, patterns, pseudotime)
+# Setting Parameters
+params <- new("CogapsParams")
+params <- setParam(params, "nPatterns", 3)
+gobj <- CoGAPS(log2(as.matrix(exprs(hiv_cds))+1), params, nIterations=1000) #run cogaps for 3 patterns
+pats <- data.frame(gobj@sampleFactors)
+FL <-  gobj@featureLoadings #ranked markers in each pattern:
+pheatmap(FL, main = "HIV CD8+ T cell NMF Patterns", scale="row", cluster_cols = FALSE)
+colnames(gobj@sampleFactors) <- c("Naive","Pre-exhausted","Exhausted")
+colnames(gobj@featureLoadings) <- c("Naive","Pre-exhausted","Exhausted")
+colnames(FL) <-c("Naive","Pre-exhausted","Exhausted")
+colnames(pats) <-c("Naive","Pre-exhausted","Exhausted")
+save(gobj,file="metrics/gobj_hcc.rda")
+load("gobj_hcc.rda")
+pats <- data.frame(gobj@sampleFactors)
+
+plotNMF(hiv_cds,pats[,"Naive"],"HIV Projected Naive Pattern","yes")
+plotNMF(hiv_cds,pats[,"Pre-exhausted"],"HIV Projected Pre-exhausted Pattern","yes")
+plotNMF(hiv_cds,pats[,"Exhausted"],"HIV Projected Exhausted Pattern","yes")
+
+pdataTc <- cbind(pdataTc,pats)
+
+# plot pseudotime by patient by condition
+df <- aggregate(Naive ~ sample_id + condition, data = pdataTc, FUN = mean)
+rownames(df) <- df$sample_id
+df$condition <- factor(df$condition, levels = c("Healthy","ART","Mild","Intermediate","Severe"))
+ggplot(df, aes(x=condition, y=Naive,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("Naive Pattern Weight Mean")
+
+df <- aggregate(`Pre-exhausted` ~ sample_id + condition, data = pdataTc, FUN = mean)
+rownames(df) <- df$sample_id
+df$condition <- factor(df$condition, levels = c("Healthy","ART","Mild","Intermediate","Severe"))
+ggplot(df, aes(x=condition, y=`Pre-exhausted`,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("Pre-exhaustion Pattern Weight Mean")
+
+df <- aggregate(Exhausted ~ sample_id + condition, data = pdataTc, FUN = mean)
+rownames(df) <- df$sample_id
+df$condition <- factor(df$condition, levels = c("Healthy","ART","Mild","Intermediate","Severe"))
+ggplot(df, aes(x=condition, y=Exhausted,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("Exhaustion Pattern Weight Mean")
+
+# Plot gene expression boxplots
+pdataTc <- cbind(pdataTc,t(as.matrix(exprs(hiv_cds))))
+df <- aggregate(TOX ~ sample_id + condition, data = pdataTc, FUN = mean)
+rownames(df) <- df$sample_id
+df$condition <- factor(df$condition, levels = c("Healthy","ART","Mild","Intermediate","Severe"))
+p1 <- ggplot(df, aes(x=condition, y=TOX,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("TOX Expression")
+
+df <- aggregate(Helios ~ sample_id + condition, data = pdataTc, FUN = mean)
+rownames(df) <- df$sample_id
+df$condition <- factor(df$condition, levels = c("Healthy","ART","Mild","Intermediate","Severe"))
+p2 <- ggplot(df, aes(x=condition, y=Helios,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("HELIOS Expression")
+
+df <- aggregate(PD_1 ~ sample_id + condition, data = pdataTc, FUN = mean)
+rownames(df) <- df$sample_id
+df$condition <- factor(df$condition, levels = c("Healthy","ART","Mild","Intermediate","Severe"))
+p3 <- ggplot(df, aes(x=condition, y=PD_1,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("PD-1 Expression")
+
+df <- aggregate(CD28 ~ sample_id + condition, data = pdataTc, FUN = mean)
+rownames(df) <- df$sample_id
+df$condition <- factor(df$condition, levels = c("Healthy","ART","Mild","Intermediate","Severe"))
+p4 <- ggplot(df, aes(x=condition, y=CD28,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("CD28 Expression")
+
+```
+
+
+#### 2) PDAC
+```{r}
+load("./paper_CDS_objects/pdac_cds.rda")
+pData(pdac_cds)$conditions_timepoint <- paste0(pData(pdac_cds)$condition,"_",pData(pdac_cds)$timepoint )
+
+#pdac_cds <- cluster_cells(pdac_cds,resolution = 1e-5)
+plot_cells(pdac_cds,group_cells_by = "partition", color_cells_by  = "partition")
+plot_cells(pdac_cds[,partitions(pdac_cds)=="1"],group_cells_by = "cluster", color_cells_by  = "cluster")
+
+plotCells(pdac_cds,"CD3","PDAC CD3 Total","yes")
+plotCells(pdac_cds,"CD4","PDAC CD4 Total","yes")
+plotCells(pdac_cds,"CD8","PDAC CD8 Total","yes")
+plotCells(pdac_cds,"GZMB","PDAC GZMB Total","yes")
+plotCells(pdac_cds,"CD19","PDAC CD19 Total","yes")
+plotCells(pdac_cds,"CCR7","PDAC CCR7 Total","yes")
+plotCells(pdac_cds,"CD45RA","PDAC CD45RA Total","yes")
+plotCells(pdac_cds,"CD45RO","PDAC CD45RO Tota","yes")
+
+# Subset / choose cells
+tc <- choose_cells(pdac_cds) #cd8+
+th <- choose_cells(pdac_cds) #cd4+
+
+plotCells(tc,"CCR7","PDAC Tc","yes")
+plotCells(tc,"CD45RA","PDAC Tc","yes")
+plotCells(tc,"CD45RO","PDAC Tc","yes")
+tc <- trajInfer(tc,"PDAC Tc Pseudotime")
+
+plotCells(th,"CCR7","PDAC Th","yes")
+plotCells(th,"CD45RA","PDAC Th","yes")
+plotCells(th,"CD45RO","PDAC Th","yes")
+th <- trajInfer(th,"PDAC Th Cell Pseudotime")
+
+#### Save pdata and pseudotimes 
+pdac_pseudotimes <- rbind(data.frame(pData(tc)),
+                          data.frame(pData(th)))
+pdac_pseudotimes$conditions_timepoint <- paste0(pdac_pseudotimes$condition,"_",pdac_pseudotimes$timepoint )
+write.table(pdac_pseudotimes,file="pdac_metrics.txt")
+
+# Load OS data into objects
+t <- read.table("./pseudotimes/pdac_metrics.txt")
+t$patient_id <- as.character(t$patient_id)
+survival <- read.csv("1_pdac_patient_survival_data.csv",row.names = 1) 
+t$survival <- ""
+pData(pdac_cds)$survival <- ""
+for (patient in rownames(survival)){
+  t[t$patient_id==patient,]$survival <-  as.numeric(survival[patient,])
+}
+for (patient in rownames(survival)){
+  pData(pdac_cds)[pData(pdac_cds)$patient_id==patient,]$survival <-  as.numeric(survival[patient,])
+}
+pdataTc <- t[t$subset == "PDAC Tc Pseudotime",]
+pdataTh <- t[t$subset == "PDAC Th Cell Pseudotime",]
+tc <- pdac_cds[,rownames(pdataTc)] #subset cds to tc
+th <- pdac_cds[,rownames(pdataTh)] #subset cds to th
+samples <-as.character(unique(t$sample_id))
+patients <-as.character(unique(t$patient_id))
+
+# Assign colors and annotations
+ann <- data.frame(str_split_fixed(unique(paste(t$sample_id,t$conditions_timepoint)), " ", 2))
+colnames(ann) <- c("sample_id","conditions_timepoint")
+rownames(ann) <- ann$sample_id
+ann$color <- ""
+ann[ann$condition=="Benefit_0wk",]$color <- "blue"
+ann[ann$condition=="Benefit_7wk",]$color <- "black"
+ann[ann$condition=="NoBenefit_0wk",]$color <- "orange"
+ann[ann$condition=="NoBenefit_7wk",]$color <- "red"
+colorsSample <- ann$color
+colorsGroup <- ann$conditions_timepoint
+names(colorsSample) <- ann$sample_id
+names(colorsGroup) <- ann$conditions_timepoint
+
+### Plot overlayed fitted lines of pseudotime by expression 
+tcsmooth <- pdataTc[,c("pseudotime","CCR7","CD45RO","CD45RA","GZMB")]
+tcsmooth <- melt(tcsmooth, id.vars=c("pseudotime"))
+ggplot(tcsmooth) +
+  stat_smooth(aes(y = value, x=pseudotime, color = variable))+
+    theme_classic2() + ylab("Surface Protein Expression") + xlab("Tc Pseudotime")+theme(legend.position="top") + labs(color='Markers') 
+   # scale_color_manual(name = "Markers", values = c("CCR7" = "blue", "GZMB" = "red","CD45RO" = "orange","CD45RA" = "black"))
+
+thsmooth <- pdataTh[,c("pseudotime","CCR7","CD45RO","CD45RA","GZMB")]
+thsmooth <- melt(thsmooth, id.vars=c("pseudotime"))
+ggplot(thsmooth) +
+  stat_smooth(aes(y = value, x=pseudotime, color = variable))+
+    theme_classic2() + ylab("Surface Protein Expression") + xlab("Th Pseudotime")+theme(legend.position="top") + labs(color='Markers') 
+
+
+### ### ### ### ### ### ### ### ### ### ### ### ### 
+##### COMPARE PSEUDOTIME TO COGAPS PATTERN WEIGHTS
+### ### ### ### ### ### ### ### ### ### ### ### ### 
+
+# Project a patient to another patient of unknown survival. First by running cogaps and then projecting
+library(CoGAPS);library(Seurat);library(projectR)
+# Setting Parameters
+# params <- new("CogapsParams")
+# params <- setParam(params, "nPatterns", 3)
+# gobj <- CoGAPS(log2(cbind(as.matrix(exprs(tc)),as.matrix(exprs(th)))+1), params, nIterations=1000) #run cogaps for 3 patterns
+# pats <- data.frame(gobj@sampleFactors)
+# FL <-  gobj@featureLoadings #ranked markers in each pattern:
+# pheatmap(FL, main = "T cell NMF Patterns", scale="row")
+# colnames(gobj@sampleFactors) <- c("Memory","Effector","Naive")
+# colnames(gobj@featureLoadings) <- c("Memory","Effector","Naive")
+# colnames(FL) <- c("Memory","Effector","Naive")
+# colnames(pats) <- c("Memory","Effector","Naive")
+# rownames(pats) <- gsub("X","",rownames(pats))
+# save(gobj,file="metrics/gobj_pdac.rda")
+load("gobj_pdac.rda")
+pats <- data.frame(gobj@sampleFactors)
+
+plotNMF(tc,pats[colnames(tc),]$Naive,"Naive Pattern Tc","yes")
+plotNMF(tc,pats[colnames(tc),]$Memory,"Memory Pattern Tc","yes")
+plotNMF(tc,pats[colnames(tc),]$Effector,"Effector Pattern Tc","yes")
+plotNMF(th,pats[colnames(th),]$Naive,"Naive Pattern Th","yes")
+plotNMF(th,pats[colnames(th),]$Memory,"Memory Pattern Th","yes")
+plotNMF(th,pats[colnames(th),]$Effector,"Effector Pattern Th","yes")
+
+allTcDat <- cbind(pdataTc,pats[colnames(tc),]) #combine all data
+allThDat <- cbind(pdataTh,pats[colnames(th),]) #combine all data
+alldat <- rbind(allTcDat,allThDat)
+alldat$subset <- gsub(" Pseudotime","",alldat$subset)
+alldat$subset <- gsub(" Cell","",alldat$subset)
+
+alldat$cellid <- rownames(alldat)
+write.table(alldat,file="metrics/pdac_metrics.txt")
+t <- read.table("./metrics/pdac_metrics.txt")
+allTcDat <- t[t$subset =="PDAC Tc",]
+allThDat <- t[t$subset =="PDAC Th",]
+
+# violin plots of pattern weights
+cols <- unique(colorsGroup)
+names(cols) <- unique(names(colorsGroup))
+ggplot(allTcDat, aes(x=conditions_timepoint, y=Naive,color=conditions_timepoint))+ geom_violin(trim=FALSE,fill='#A4A4A4')+stat_summary(fun.y=median, geom="point", shape=15, size=2, color="darkred")+theme_minimal()+ggtitle("Naive Pattern")+scale_color_manual(values = alpha(groupColors))
+ggplot(allTcDat, aes(x=conditions_timepoint, y=`Memory Pattern`,color=conditions_timepoint)) + geom_violin(trim=FALSE,fill='#A4A4A4')+stat_summary(fun.y=median, geom="point", shape=15, size=2, color="darkred")+theme_minimal()+ggtitle("Memory Pattern")+scale_color_manual(values = alpha(groupColors))
+ggplot(allTcDat, aes(x=conditions_timepoint, y=`Effector Pattern`,color=conditions_timepoint)) + geom_violin(trim=FALSE,fill='#A4A4A4')+stat_summary(fun.y=median, geom="point", shape=15, size=2, color="darkred")+theme_minimal()+ggtitle("Effector Pattern")+scale_color_manual(values = alpha(groupColors))
+
+ggplot(allTcDat, aes(x=`Naive Pattern`, y=as.numeric(survival),color=timepoint))+ geom_smooth()+theme_minimal()+ylab("OS")+ggtitle("Naive Pattern by OS")
+ggplot(allTcDat, aes(x=`Memory Pattern`, y=as.numeric(survival),color=timepoint))+ geom_smooth()+theme_minimal()+ylab("OS")+ggtitle("Memory Pattern by OS")
+ggplot(allTcDat, aes(x=`Effector Pattern`, y=as.numeric(survival),color=timepoint))+ geom_smooth()+theme_minimal()+ylab("OS")+ggtitle("Effector Pattern by OS")
+
+
+### ### ### ### ### ### ### ### ### ### ### ### ### 
+##### Plot positive group results
+### ### ### ### ### ### ### ### ### ### ### ### ### 
+
+# Th
+df <- aggregate(pseudotime ~ sample_id + conditions_timepoint + condition + timepoint + patient_id, data = allThDat, FUN = mean)
+rownames(df) <- df$sample_id
+
+ggplot(df, aes(x=timepoint, y=pseudotime, group = patient_id, color=condition))+geom_line(show.legend = T, aes(color=condition)) + stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = TRUE,comparisons = list(c("0wk", "7wk")))+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+scale_color_manual(values = c("Benefit" = "blue","NoBenefit"="red"))
+
+df <- aggregate(Memory ~ sample_id + conditions_timepoint + condition + timepoint + patient_id, data = allThDat, FUN = mean)
+rownames(df) <- df$sample_id
+
+ggplot(df, aes(x=conditions_timepoint, y=Memory, color=condition))+geom_boxplot() + geom_jitter(show.legend = T) + stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(df$conditions_timepoint),2, simplify = FALSE),hide.ns=TRUE)+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+scale_color_manual(values = c("Benefit" = "blue","NoBenefit"="red")) + ggtitle("Th Memory Pattern")
+
+df <- aggregate(Effector ~ sample_id + conditions_timepoint + condition + timepoint + patient_id + survival, data = allThDat, FUN = mean)
+rownames(df) <- df$sample_id
+
+pmat <- df[grepl("0wk",rownames(df)),][order(df[grepl("0wk",rownames(df)),]$Effector, decreasing = TRUE),]
+rownames(pmat) <- as.numeric(data.frame(str_split_fixed(rownames(pmat), "-", 2))$X1)
+pmat$Months <- pmat[rownames(pmat),]$survival   
+pmat$Effector <- ""
+pmat[1:6,]$Effector <- "High Th Effector Pattern"
+pmat[7:12,]$Effector <- "Low Th Effector Pattern"
+ggsurvplot(
+  fit = survfit(Surv(Months) ~ Effector, data = pmat), 
+  xlab = "Months", 
+  ylab = "OS")
+coxph(Surv(Months) ~ Effector, data = pmat) %>% gtsummary::tbl_regression(exp = TRUE) 
+
+# Tc
+df <- aggregate(Memory ~ sample_id + conditions_timepoint + condition + timepoint + patient_id, data = allTcDat, FUN = mean)
+rownames(df) <- df$sample_id
+
+ggplot(df, aes(x=conditions_timepoint, y=Memory, color=condition))+geom_boxplot() + geom_jitter(show.legend = T) + stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(df$conditions_timepoint),2, simplify = FALSE),hide.ns=TRUE)+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+scale_color_manual(values = c("Benefit" = "blue","NoBenefit"="red")) + ggtitle("Tc Memory")
+```
+
+
+#### 3) HCC
+```{r}
+load("C:/Users/sidir/OneDrive - Johns Hopkins/WON_RESEARCH/CYTOF_Metrics_Paper/paper_CDS_objects/HCC_cds.rda")
+setwd("C:/Users/sidir/OneDrive - Johns Hopkins/WON_RESEARCH/CYTOF_Metrics_Paper/figures/2_hcc_analysis")
+
+plotCells(cds,"CD3","HCC CD3 Total","yes")
+plotCells(cds,"CD4","HCC CD4 Total","yes")
+plotCells(cds,"CD8","HCC CD8 Total","yes")
+plotCells(cds,"CD19","HCC CD19 Total","yes")
+plotCells(cds,"CCR7","HCC CCR7 Total","yes")
+plotCells(cds,"CD45RA","HCC CD45RA Total","yes")
+plotCells(cds,"CD45RO","HCC CD45RO Total","yes")
+
+# subset
+tc <- choose_cells(cds) #cd8+
+th <- choose_cells(cds) #cd4+
+
+## pseudotime analysis
+plotCells(tc,"CCR7","HCC Tc","yes")
+plotCells(tc,"CD45RA","HCC Tc","yes")
+plotCells(tc,"CD45RO","HCC Tc","yes")
+tc <- trajInfer(tc,"HCC Tc")
+
+plotCells(th,"CCR7","HCC Th","yes")
+plotCells(th,"CD45RA","HCC Th","yes")
+plotCells(th,"CD45RO","HCC Th","yes")
+th <- trajInfer(th,"HCC Th")
+
+## run cogaps and combine all data together (expression, patterns, pseudotime)
+# Setting Parameters
+params <- new("CogapsParams")
+params <- setParam(params, "nPatterns", 3)
+gobj <- CoGAPS(log2(cbind(as.matrix(exprs(tc)),as.matrix(exprs(th)))+1), params, nIterations=1000) #run cogaps for 3 patterns
+pats <- data.frame(gobj@sampleFactors)
+FL <-  gobj@featureLoadings #ranked markers in each pattern:
+pheatmap(FL, main = "T cell NMF Patterns", scale="row")
+colnames(gobj@sampleFactors) <- c("Naive","Memory","Effector")
+colnames(gobj@featureLoadings) <- c("Naive","Memory","Effector")
+colnames(FL) <- c("Naive","Memory","Effector")
+colnames(pats) <- c("Naive","Memory","Effector")
+save(gobj,file="metrics/gobj_hcc.rda")
+load("metrics/gobj_hcc.rda")
+pats <- data.frame(gobj@sampleFactors)
+
+plotNMF(tc,pats[colnames(tc),]$Naive,"Naive Pattern Tc","yes")
+plotNMF(tc,pats[colnames(tc),]$Memory,"Memory Pattern Tc","yes")
+plotNMF(tc,pats[colnames(tc),]$Effector,"Effector Pattern Tc","yes")
+plotNMF(th,pats[colnames(th),]$Naive,"Naive Pattern Th","yes")
+plotNMF(th,pats[colnames(th),]$Memory,"Memory Pattern Th","yes")
+plotNMF(th,pats[colnames(th),]$Effector,"Effector Pattern Th","yes")
+
+
+plotNMF(tc,pats[colnames(tc),]$Naive,"Naive Pattern Tc","yes")
+plotNMF(tc,pats[colnames(tc),]$Memory,"Memory Pattern Tc","yes")
+plotNMF(tc,pats[colnames(tc),]$Effector,"Effector Pattern Tc","yes")
+plotNMF(th,pats[colnames(th),]$Naive,"Naive Pattern Th","yes")
+plotNMF(th,pats[colnames(th),]$Memory,"Memory Pattern Th","yes")
+plotNMF(th,pats[colnames(th),]$Effector,"Effector Pattern Th","yes")
+
+
+## Save pData, patterns and pseudotimes 
+allThDat <- cbind(data.frame(pData(th)),pats[rownames(pData(th)),],data.frame(as.matrix(t(exprs(th))))) #combine all data
+allThDat$subset <- "HCC Th"
+allTcDat <- cbind(data.frame(pData(tc)),pats[rownames(pData(tc)),],data.frame(as.matrix(t(exprs(tc))))) #combine all data
+allTcDat$subset <- "HCC Tc"
+
+HCCdata <- rbind(allTcDat,allThDat)
+write.table(HCCdata,file="metrics/HCCdata_processed.txt")
+
+HCCdata <- read.table("C:/Users/sidir/OneDrive - Johns Hopkins/WON_RESEARCH/CYTOF_Metrics_Paper/metrics/HCCdata_processed.txt")
+HCCdata$virustype_timepoint <- paste0(HCCdata$virustype, "_",HCCdata$timepoint)
+HCCdata$response_timepoint <- paste0(HCCdata$response, "_",HCCdata$timepoint)
+HCCdata[HCCdata$virustype == "HBV/HCV",]$virustype <- "HV_Untreated"
+HCCdata[HCCdata$virustype == "HCV",]$virustype <- "HV_Untreated"
+HCCdata[HCCdata$virustype == "HCVtreated",]$virustype <- "HV_Treated"
+HCCdata <- HCCdata[HCCdata$virustype != "ETOH",]
+HCCdata <- HCCdata[HCCdata$virustype != "Unknown",]
+pdataTc <- HCCdata[HCCdata$subset == "HCC Tc",]
+pdataTh <- HCCdata[HCCdata$subset == "HCC Th",]
+tc <- cds[,rownames(pdataTc)] #subset cds to tc
+th <- cds[,rownames(pdataTh)] #subset cds to th
+
+ggplot(pdataTh, aes(x=virustype , y=Effector, fill=virustype)) + geom_violin(trim=TRUE)+ theme_classic() + ggtitle(pdataTc$subset[1])+stat_summary(fun.y=mean, geom="point", shape=15, size=2, color="darkred") +facet_wrap(~timepoint, nrow = 1, scales = 'free')
+
+df <- aggregate(pseudotime ~ sample_id + virustype + timepoint + response + patient_id + response_timepoint, data = pdataTc, FUN = mean)
+rownames(df) <- df$sample_id
+ggplot(df, aes(x=virustype, y=Effector, color=timepoint))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(method="t.test",paired = FALSE,comparisons = combn(unique(df$virustype),2, simplify = FALSE),hide.ns=TRUE)
+
+ggplot(df, aes(x=response, y=Effector, color=timepoint))+geom_boxplot()+geom_jitter(show.legend = T)+facet_wrap(~virustype, nrow = 1, scales = 'free')+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(method="t.test",paired = FALSE,comparisons = combn(unique(df$response),2, simplify = FALSE),hide.ns=TRUE)
+
+ggplot(df, aes(x=response, y=pseudotime, color=timepoint))+geom_boxplot()+geom_jitter(show.legend = T)+facet_wrap(~timepoint, nrow = 1, scales = 'free')+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(method="t.test",paired = FALSE,comparisons = combn(unique(df$response),2, simplify = FALSE),hide.ns=TRUE)
+
+
+# Plot Effector pattern in CD8 T cells
+df <- aggregate(Effector ~ sample_id + virustype + timepoint + response + patient_id + etiology, data = pdataTc, FUN = mean)
+rownames(df) <- df$sample_id
+
+ggplot(df, aes(x=etiology, y=Effector, color=etiology))+geom_boxplot()+geom_jitter(show.legend = T)+facet_wrap(~timepoint, nrow = 1, scales = 'free')+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..), method="t.test",paired = FALSE,comparisons = combn(unique(df$etiology),2, simplify = FALSE),hide.ns=TRUE)
+
+
+
+###############################################
+### projectR cogaps patterns from PDAC onto HCC:
+###############################################
+load("metrics/gobj_pdac.rda")
+pca2target <- projectR(data = as.matrix(exprs(cds)),loadings=gobj, full=TRUE)
+proj <- t(pca2target$projection)
+ggplot(melt(proj), aes(x=Var2, y=value,color=Var2)) + geom_violin(trim=FALSE,fill='#A4A4A4')+stat_summary(fun.y=median, geom="point", shape=15, size=2, color="darkred")+theme_minimal()+labs(color="Patterns")+ylab("Projected Pattern Weight") +xlab("Patterns")
+
+FL <-  pca2target@featureLoadings #ranked markers in each pattern:
+pheatmap(FL, main = "Projected T cell NMF Patterns", scale="row")
+
+plotNMF(cds,proj[,"Naive"],"HCC Projected Naive Pattern","yes")
+plotNMF(cds,proj[,"Memory"],"HCC Projected Memory Pattern","yes")
+
+pData(cds)$Effector_proj <- proj[,"Effector"]
+pData(cds)$Memory_proj <- proj[,"Memory"]
+pData(cds)$Naive_proj <- proj[,"Naive"]
+
+HCCdata$virustype_timepoint <- paste0(HCCdata$virustype, "_",HCCdata$timepoint)
+HCCdata$response_timepoint <- paste0(HCCdata$response, "_",HCCdata$timepoint)
+HCCdata[HCCdata$virustype == "HBV/HCV",]$virustype <- "HV_Untreated"
+HCCdata[HCCdata$virustype == "HCV",]$virustype <- "HV_Untreated"
+HCCdata[HCCdata$virustype == "HCVtreated",]$virustype <- "HV_Treated"
+# HCCdata <- HCCdata[HCCdata$virustype != "ETOH",]
+# HCCdata <- HCCdata[HCCdata$virustype != "Unknown",]
+
+HCCdata <- cbind(pData(cds[,rownames(HCCdata)]),t(as.matrix(exprs(cds[,rownames(HCCdata)]))))
+pdatCD3 <- HCCdata[HCCdata$CD3>3,]
+pdatCD3CD8 <- HCCdata[HCCdata$CD8>3,]
+pdatCD3CD4 <- HCCdata[HCCdata$CD4>3,]  
+
+df <- aggregate(Effector_proj ~ sample_id + virustype + timepoint + response + patient_id + etiology, data = pdatCD3CD8, FUN = mean)
+rownames(df) <- df$sample_id
+
+ggplot(df[df$timepoint=="0wk",], aes(x=response, y=Memory_proj,color = response))+geom_boxplot()+geom_jitter(show.legend = T)+facet_wrap(~virustype, nrow = 1, scales = 'free')+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(method="t.test",paired = FALSE,comparisons = combn(unique(df$response),2, simplify = FALSE),hide.ns=TRUE)
+
+ggplot(df, aes(x=etiology, y=Effector_proj, color=etiology))+geom_boxplot()+geom_jitter(show.legend = T)+facet_wrap(~timepoint, nrow = 1, scales = 'free')+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..), method="t.test",paired = FALSE,comparisons = combn(unique(df$etiology),2, simplify = FALSE),hide.ns=TRUE)
+
+
+
+```
+
+
+#### 4) Hodi melanoma
+```{r}
+#stimulated
+load("./paper_CDS_objects/hodi_Ipi_stim.rda")
+
+#unstimulated, use this
+load("./paper_CDS_objects/hodi_Ipi_unstim.rda")
+
+cds<-reduce_dimension(cds)
+plot_cells(cds)
+
+#####################################################
+### projectR cogaps patterns from PDAC onto Melanoma:
+#####################################################
+load("metrics/gobj_pdac.rda")
+pca2target <- projectR(data = as.matrix(exprs(cds)),loadings=gobj, full=TRUE)
+proj <- t(pca2target$projection)
+ggplot(melt(proj), aes(x=Var2, y=value,color=Var2)) + geom_violin(trim=FALSE,fill='#A4A4A4')+stat_summary(fun.y=median, geom="point", shape=15, size=2, color="darkred")+theme_minimal()+labs(color="Patterns")+ylab("Projected Pattern Weight") +xlab("Patterns")
+
+plotNMF(cds,proj[,"Effector"],"Melanoma Projected Effector Pattern Stim","yes")
+plotNMF(cds,proj[,"Naive"],"Melanoma Projected Naive Pattern Stim","yes")
+plotNMF(cds,proj[,"Memory"],"Melanoma Projected Memory Pattern Stim","yes")
+
+pData(cds)$Effector_proj <- proj[,"Effector"]
+pData(cds)$Memory_proj <- proj[,"Memory"]
+pData(cds)$Naive_proj <- proj[,"Naive"]
+
+pdat <- pData(cds)
+pdat <- cbind(pdat,t(as.matrix(exprs(cds))))
+
+pdatCD3 <- pdat[pdat$CD3>3,]
+pdatCD3CD8 <- pdat[pdat$CD8>3,]
+pdatCD3CD4 <- pdat[pdat$CD4>3,]
+
+df <- aggregate(Memory_proj ~ sample_id + Response, data = pdatCD3CD8, FUN = mean)
+rownames(df) <- df$sample_id
+
+ggplot(df, aes(x=Response, y=Memory_proj,color = Response))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(df$Response),2, simplify = FALSE),hide.ns=TRUE)
+
+cdsCD8 <- cds[,rownames(pdatCD3CD8)]
+cdsCD8 <- reduce_dimension(cdsCD8)
+plotNMF(cdsCD8,proj[colnames(cdsCD8),"Memory"],"Melanoma Projected Memory Pattern CD8","yes")
+
+save(cds,file="./paper_CDS_objects/hodi_Ipi_unstim_projected.rda")
+
+load("hodi_Ipi_unstim_projected.rda")
+
+pdat <- cbind(pData(cds),t(as.matrix(exprs(cds))))
+pdatCD3 <- pdat[pdat$CD3>3,]
+pdatCD3CD8 <- pdat[pdat$CD8>3,]
+pdatCD3CD4 <- pdat[pdat$CD4>3,]
+
+tc <- cds[,rownames(pdatCD3CD8)]
+th <- cds[,rownames(pdatCD3CD4)]
+
+## run cogaps and compare to projection
+# Setting Parameters
+params <- new("CogapsParams")
+params <- setParam(params, "nPatterns", 3)
+gobj <- CoGAPS(log2(cbind(as.matrix(exprs(tc)),as.matrix(exprs(th)))+1), params, nIterations=1000) #run cogaps for 3 patterns
+pats <- data.frame(gobj@sampleFactors)
+FL <-  gobj@featureLoadings #ranked markers in each pattern:
+pheatmap(FL, main = "T cell NMF Patterns", scale="row", cluster_cols = FALSE)
+colnames(gobj@sampleFactors) <- c("Naive","Memory","Effector")
+colnames(gobj@featureLoadings) <- c("Naive","Memory","Effector")
+colnames(FL) <- c("Naive","Memory","Effector")
+colnames(pats) <- c("Naive","Memory","Effector")
+save(gobj,file="metrics/gobj_melanoma.rda")
+```
+
+
+#### 5) Supplemental
+```{r}
+### ### ### ### ### ### ### ### ### ### ### ### 
+### COMPARING METHODS USING DYNVERSE in PDAC tc
+### ### ### ### ### ### ### ### ### ### ### ### 
+pdf("method_comparison.pdf")
+dataset <- wrap_expression(
+  expression = t(counts(tc)),
+  counts = t(counts(tc))
+)
+dataset <- add_dimred(
+  dataset,
+  reducedDims(tc)$UMAP
+)
+
+# Select start cell
+start_cell <- choose_cells(tc)
+start_cell <- rownames(pData(start_cell))[1]
+dataset <- add_prior_information(
+  dataset,
+  start_id = start_cell
+)
+
+# Select methods based on dynverse suggestions and execute
+guidelines <- guidelines_shiny(dataset)
+methods_selected <- guidelines$methods_selected
+method1 <- methods_selected[1] #SCORPIUS
+method2 <- methods_selected[2] #TSCAN
+method3 <- methods_selected[3] #WATERFALL
+method4 <- methods_selected[4] #COMP1
+#method5 <- get_ti_methods(as_tibble = FALSE)[[52]]$fun #slingshot
+model1 <- infer_trajectory(dataset, method1, give_priors = c("start_id")) 
+model2 <- infer_trajectory(dataset, method2, give_priors = c("start_id")) 
+model3 <- infer_trajectory(dataset, method3, give_priors = c("start_id")) 
+model4 <- infer_trajectory(dataset, method4, give_priors = c("start_id")) 
+model5 <- infer_trajectory(dataset, method5(), give_priors = c("start_id")) 
+#model5 <- dynwrap::infer_trajectory(dataset, method5(), give_priors = c("start_id"), verbose = TRUE, filter_features = FALSE )
+save(model1,file = "model1_tc.rda")
+save(model2,file = "model2_tc.rda")
+save(model3,file = "model3_tc.rda")
+save(model4,file = "model4_tc.rda")
+
+load("pseudotimes/model1_tc.rda")
+load("pseudotimes/model2_tc.rda")
+load("pseudotimes/model3_tc.rda")
+load("pseudotimes/model4_tc.rda")
+
+# After running the models, you can visualize: 
+plot_dimred(model)
+
+#compare pseudotimes between each model ($pseudotime_model), retaining monocle model as $pseudotime
+model1_pdataTc <- pdataTc[rownames(data.frame(model1$pseudotime)),]
+model1_pdataTc$pseudotime_model <- model1$pseudotime
+
+model2_pdataTc <- pdataTc[rownames(data.frame(model2$pseudotime)),]
+model2_pdataTc$pseudotime_model <- model2$pseudotime
+
+model3_pdataTc <- pdataTc[rownames(data.frame(model3$pseudotime)),]
+model3_pdataTc$pseudotime_model <- model3$pseudotime
+
+model4_pdataTc <- pdataTc[rownames(data.frame(model4$pseudotime)),]
+model4_pdataTc$pseudotime_model <- model4$pseudotime
+
+ggplot(pdataTc, aes(x=conditions_timepoint, y=pseudotime,color=conditions_timepoint)) + geom_violin(trim=FALSE,fill='#A4A4A4')+stat_summary(fun.y=median, geom="point", shape=15, size=2, color="darkred") + theme_minimal() + ggtitle("Monocle Model Tc")+scale_color_manual(values = alpha(groupColors))
+ggplot(model1_pdataTc, aes(x=conditions_timepoint, y=(pseudotime_model*-1),color=conditions_timepoint)) + geom_violin(trim=FALSE,fill='#A4A4A4')+stat_summary(fun.y=median, geom="point", shape=15, size=2, color="darkred") + theme_minimal() + ggtitle("Tc Model 1")+scale_color_manual(values = alpha(groupColors))
+ggplot(model2_pdataTc, aes(x=conditions_timepoint, y=(pseudotime_model*-1),color=conditions_timepoint)) + geom_violin(trim=FALSE,fill='#A4A4A4')+stat_summary(fun.y=median, geom="point", shape=15, size=2, color="darkred") + theme_minimal() + ggtitle("Tc Model 2")+scale_color_manual(values = alpha(groupColors))
+ggplot(model3_pdataTc, aes(x=conditions_timepoint, y=pseudotime_model,color=conditions_timepoint)) + geom_violin(trim=FALSE,fill='#A4A4A4')+stat_summary(fun.y=median, geom="point", shape=15, size=2, color="darkred") + theme_minimal() + ggtitle("Tc Model 3")+scale_color_manual(values = alpha(groupColors))
+ggplot(model4_pdataTc, aes(x=conditions_timepoint, y=pseudotime_model,color=conditions_timepoint)) + geom_violin(trim=FALSE,fill='#A4A4A4')+stat_summary(fun.y=median, geom="point", shape=15, size=2, color="darkred") + theme_minimal() + ggtitle("Tc Model 4")+scale_color_manual(values = alpha(groupColors))
+
+save_pseudotime_umap(tc,model1_pdataTc$pseudotime_model,"Tc Model 1")
+save_pseudotime_umap(tc,model2_pdataTc$pseudotime_model,"Tc Model 2")
+save_pseudotime_umap(tc,model3_pdataTc$pseudotime_model,"Tc Model 3")
+save_pseudotime_umap(tc,model4_pdataTc$pseudotime_model,"Tc Model 4")
+    
+cor(model1_pdataTc$pseudotime_model,model1_pdataTc$pseudotime) #test correlations like this, or below
+cor.test(model1_pdataTc$pseudotime_model,model1_pdataTc$pseudotime)
+
+#model2 has fewer cells after running so subset the other models
+allPseudoMat <- data.frame(model1_pdataTc[rownames(model2_pdataTc),]$pseudotime_model*-1,
+                           model2_pdataTc$pseudotime_model*-1,
+                           model3_pdataTc[rownames(model2_pdataTc),]$pseudotime_model,
+                           model4_pdataTc[rownames(model2_pdataTc),]$pseudotime_model,
+                           model1_pdataTc[rownames(model2_pdataTc),]$pseudotime,
+                           pats[rownames(model2_pdataTc),]$`Naive Pattern`,
+                           pats[rownames(model2_pdataTc),]$`Memory Pattern`,
+                           pats[rownames(model2_pdataTc),]$`Effector Pattern` )
+write.table(allPseudoMat,file="allModels_pseudotimes_cogaps_included.txt")
+colnames(allPseudoMat) <- c("SCORPIUS","TSCAN","WATERFALL","COMP1","MONOCLE3","Naive Pattern","Memory Pattern","Effector Pattern")
+res <- cor(allPseudoMat)
+rcorr(as.matrix(allPseudoMat))
+corrplot(res, type = "upper", order = "hclust", tl.col = "black", tl.srt = 45)
+dev.off()
+```
+
+
+
