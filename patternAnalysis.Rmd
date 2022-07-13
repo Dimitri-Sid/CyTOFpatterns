@@ -670,6 +670,23 @@ colnames(pats) <- c("Naive","Memory","Effector")
 save(gobj,file="metrics/gobj_melanoma.rda")
 ```
 
+#### 5) Rphenograph on HIV dataset
+```{r}
+library(Rphenograph)
+load("./paper_CDS_objects/CD8exh.rda")
+iris_unique <- unique(iris) # Remove duplicates
+#data <- as.matrix(iris_unique[,1:4])
+data <- t(as.matrix(counts(cds)))
+Rphenograph_out_100 <- Rphenograph(data, k = 100)
+Rphenograph_out_500 <- Rphenograph(data, k = 500)
+Rphenograph_out_1000 <- Rphenograph(data, k = 1000)
+Rphenograph_out_10000 <- Rphenograph(data, k = 10000)
+
+modularity(Rphenograph_out[[2]])
+membership(Rphenograph_out[[2]])
+iris_unique$phenograph_cluster <- factor(membership(Rphenograph_out[[2]]))
+ggplot(iris_unique, aes(x=Sepal.Length, y=Sepal.Width, col=Species, shape=phenograph_cluster)) + geom_point(size = 3)+theme_bw()
+```
 
 #### 5) Supplemental
 ```{r}

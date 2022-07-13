@@ -1,0 +1,130 @@
+---
+title: "CyTOF analysis of cell states for diverse immunological applications"
+output: html_document
+---
+
+#### Load global packages / set working directory
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(pheatmap)
+library(ggpubr)
+library(corrplot)
+library(Hmisc)
+library(reshape2)
+library(viridis)
+library(geepack)
+library(mixtools)
+library(MESS)
+library(tidyr)
+library(ggplot2)
+library(tidyverse)
+library(monocle3)
+library(projectR)
+library(stringr)
+library(survival)
+library(survminer)
+library(lubridate)
+#library(dyno)
+setwd("C:/Users/sidir/OneDrive - Johns Hopkins/WON_RESEARCH/CYTOF_Metrics_Paper/figures")
+```
+
+### Method comparison
+```{r}
+### ### ### ### ### ### ### ### ### ### ### ### 
+### COMPARING METHODS USING DYNVERSE in PDAC tc
+### ### ### ### ### ### ### ### ### ### ### ### 
+pdf("method_comparison.pdf")
+dataset <- wrap_expression(
+  expression = t(counts(tc)),
+  counts = t(counts(tc))
+)
+dataset <- add_dimred(
+  dataset,
+  reducedDims(tc)$UMAP
+)
+
+# Select start cell
+start_cell <- choose_cells(tc)
+start_cell <- rownames(pData(start_cell))[1]
+dataset <- add_prior_information(
+  dataset,
+  start_id = start_cell
+)
+
+# Select methods based on dynverse suggestions and execute
+guidelines <- guidelines_shiny(dataset)
+methods_selected <- guidelines$methods_selected
+method1 <- methods_selected[1] #SCORPIUS
+method2 <- methods_selected[2] #TSCAN
+method3 <- methods_selected[3] #WATERFALL
+method4 <- methods_selected[4] #COMP1
+#method5 <- get_ti_methods(as_tibble = FALSE)[[52]]$fun #slingshot
+model1 <- infer_trajectory(dataset, method1, give_priors = c("start_id")) 
+model2 <- infer_trajectory(dataset, method2, give_priors = c("start_id")) 
+model3 <- infer_trajectory(dataset, method3, give_priors = c("start_id")) 
+model4 <- infer_trajectory(dataset, method4, give_priors = c("start_id")) 
+model5 <- infer_trajectory(dataset, method5(), give_priors = c("start_id")) 
+#model5 <- dynwrap::infer_trajectory(dataset, method5(), give_priors = c("start_id"), verbose = TRUE, filter_features = FALSE )
+save(model1,file = "model1_tc.rda")
+save(model2,file = "model2_tc.rda")
+save(model3,file = "model3_tc.rda")
+save(model4,file = "model4_tc.rda")
+
+load("pseudotimes/model1_tc.rda")
+load("pseudotimes/model2_tc.rda")
+load("pseudotimes/model3_tc.rda")
+load("pseudotimes/model4_tc.rda")
+
+# After running the models, you can visualize: 
+plot_dimred(model)
+
+#compare pseudotimes between each model ($pseudotime_model), retaining monocle model as $pseudotime
+model1_pdataTc <- pdataTc[rownames(data.frame(model1$pseudotime)),]
+model1_pdataTc$pseudotime_model <- model1$pseudotime
+
+model2_pdataTc <- pdataTc[rownames(data.frame(model2$pseudotime)),]
+model2_pdataTc$pseudotime_model <- model2$pseudotime
+
+model3_pdataTc <- pdataTc[rownames(data.frame(model3$pseudotime)),]
+model3_pdataTc$pseudotime_model <- model3$pseudotime
+
+model4_pdataTc <- pdataTc[rownames(data.frame(model4$pseudotime)),]
+model4_pdataTc$pseudotime_model <- model4$pseudotime
+
+ggplot(pdataTc, aes(x=conditions_timepoint, y=pseudotime,color=conditions_timepoint)) + geom_violin(trim=FALSE,fill='#A4A4A4')+stat_summary(fun.y=median, geom="point", shape=15, size=2, color="darkred") + theme_minimal() + ggtitle("Monocle Model Tc")+scale_color_manual(values = alpha(groupColors))
+ggplot(model1_pdataTc, aes(x=conditions_timepoint, y=(pseudotime_model*-1),color=conditions_timepoint)) + geom_violin(trim=FALSE,fill='#A4A4A4')+stat_summary(fun.y=median, geom="point", shape=15, size=2, color="darkred") + theme_minimal() + ggtitle("Tc Model 1")+scale_color_manual(values = alpha(groupColors))
+ggplot(model2_pdataTc, aes(x=conditions_timepoint, y=(pseudotime_model*-1),color=conditions_timepoint)) + geom_violin(trim=FALSE,fill='#A4A4A4')+stat_summary(fun.y=median, geom="point", shape=15, size=2, color="darkred") + theme_minimal() + ggtitle("Tc Model 2")+scale_color_manual(values = alpha(groupColors))
+ggplot(model3_pdataTc, aes(x=conditions_timepoint, y=pseudotime_model,color=conditions_timepoint)) + geom_violin(trim=FALSE,fill='#A4A4A4')+stat_summary(fun.y=median, geom="point", shape=15, size=2, color="darkred") + theme_minimal() + ggtitle("Tc Model 3")+scale_color_manual(values = alpha(groupColors))
+ggplot(model4_pdataTc, aes(x=conditions_timepoint, y=pseudotime_model,color=conditions_timepoint)) + geom_violin(trim=FALSE,fill='#A4A4A4')+stat_summary(fun.y=median, geom="point", shape=15, size=2, color="darkred") + theme_minimal() + ggtitle("Tc Model 4")+scale_color_manual(values = alpha(groupColors))
+
+save_pseudotime_umap(tc,model1_pdataTc$pseudotime_model,"Tc Model 1")
+save_pseudotime_umap(tc,model2_pdataTc$pseudotime_model,"Tc Model 2")
+save_pseudotime_umap(tc,model3_pdataTc$pseudotime_model,"Tc Model 3")
+save_pseudotime_umap(tc,model4_pdataTc$pseudotime_model,"Tc Model 4")
+    
+cor(model1_pdataTc$pseudotime_model,model1_pdataTc$pseudotime) #test correlations like this, or below
+cor.test(model1_pdataTc$pseudotime_model,model1_pdataTc$pseudotime)
+
+#model2 has fewer cells after running so subset the other models
+allPseudoMat <- data.frame(model1_pdataTc[rownames(model2_pdataTc),]$pseudotime_model*-1,
+                           model2_pdataTc$pseudotime_model*-1,
+                           model3_pdataTc[rownames(model2_pdataTc),]$pseudotime_model,
+                           model4_pdataTc[rownames(model2_pdataTc),]$pseudotime_model,
+                           model1_pdataTc[rownames(model2_pdataTc),]$pseudotime,
+                           pats[rownames(model2_pdataTc),]$`Naive Pattern`,
+                           pats[rownames(model2_pdataTc),]$`Memory Pattern`,
+                           pats[rownames(model2_pdataTc),]$`Effector Pattern` )
+write.table(allPseudoMat,file="allModels_pseudotimes_cogaps_included.txt")
+colnames(allPseudoMat) <- c("SCORPIUS","TSCAN","WATERFALL","COMP1","MONOCLE3","Naive Pattern","Memory Pattern","Effector Pattern")
+res <- cor(allPseudoMat)
+rcorr(as.matrix(allPseudoMat))
+corrplot(res, type = "upper", order = "hclust", tl.col = "black", tl.srt = 45)
+dev.off()
+```
+
+
+
