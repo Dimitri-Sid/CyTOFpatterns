@@ -1,8 +1,3 @@
----
-title: "CyTOF analysis of cell states for diverse immunological applications"
-output: html_document
----
-
 #### Load global packages / set working directory
 
 ```{r}
