@@ -1,5 +1,5 @@
 ---
-title: "Patient PBMC-derived patterns of protein coregulation in cancer immunotherapy clinical trials"
+title: "Patient PBMC-derived patterns of protein coregulation in cancer immunotherapy clinical trials."
 output: html_document
 ---
 
