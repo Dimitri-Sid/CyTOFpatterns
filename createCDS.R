@@ -9,8 +9,6 @@ library(FlowSOM)
 library(flowCore)
 library(premessa)
 
-paneleditor_GUI(launch.browser = TRUE) #rename files to remove sampleID if required 
-
 #####################
 #### Data Processing
 #####################
