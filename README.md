@@ -1,4 +1,4 @@
-# Integrated T cell metrics based on mass cytometry profiling for immune monitoring applications in immunotherapy clinical trials
+# Integrated T cell cytometry metrics for immune monitoring applications in immunotherapy clinical trials.
 
 Dimitrios N. Sidiropoulos, Genevieve L Stein-O’Brien ... Elana J. Fertig, Won Jin Ho. 	
 ***JCI Insight***. 2022
