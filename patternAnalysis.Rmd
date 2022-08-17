@@ -21,15 +21,14 @@ library(mixtools)
 library(MESS)
 library(tidyr)
 library(ggplot2)
-library(tidyverse)
 library(monocle3)
 library(projectR)
 library(stringr)
 library(survival)
 library(survminer)
 library(lubridate)
-#library(dyno)
-setwd("C:/Users/sidir/OneDrive - Johns Hopkins/WON_RESEARCH/CYTOF_Metrics_Paper/figures")
+library(dyno)
+setwd("/OneDrive - Johns Hopkins/CYTOF_Metrics_Paper/figures")
 ```
 
 
@@ -143,7 +142,7 @@ plotNMF <- function(object,pattern,title,save){ #  UMAP with NMF pattern weights
 There are 5 datasets involved in this study:
 1) HIV and CD8Tcells (external) 
 2) GVAX + Ipi in PDAC (Hopkins internal)
-3) Ipi in viral and non viral HCC (Hopkins internal) 
+3) Nivo in viral and non viral HCC (Hopkins internal) 
 4) Ipi in Hodi Melanoma (external) [stimulated and unstimulated data objects]
 
 
@@ -155,9 +154,68 @@ setwd("./figures/3_HIV_analysis")
 hiv_cds <- cds
 rm(cds)
 
-hiv_cds <- cluster_cells(hiv_cds,resolution = 1e-1)
-pData(hiv_cds)$clusters<-clusters(hiv_cds)
-plot_cells(hiv_cds,group_cells_by = "partition", color_cells_by  = "partition")
+hiv_cds <- cluster_cells(hiv_cds,resolution = 1e-6)
+pData(hiv_cds)$clusters<- hiv_cds@clusters$UMAP$clusters
+plot_cells(hiv_cds,group_cells_by = "cluster", color_cells_by  = "cluster")
+plot_cells(hiv_cds,group_cells_by = "cluster", color_cells_by  = "cluster", show_trajectory_graph = FALSE, label_cell_groups = FALSE)
+
+marker_test_res <- top_markers(hiv_cds, group_cells_by="cluster", 
+                               reference_cells=1000, cores=8)
+top_specific_markers <- marker_test_res %>%
+                            filter(fraction_expressing >= 0.10) %>%
+                            group_by(cell_group) %>%
+                            top_n(32, pseudo_R2)
+top_specific_marker_ids <- unique(top_specific_markers %>% pull(gene_id))
+plot_genes_by_group(hiv_cds[-c(21,23),],
+                    top_specific_marker_ids[-c(21,23)],
+                    group_cells_by="cluster",
+                    ordering_type="maximal_on_diag",
+                    max.size=3)
+
+### COMPOSITION PROFILE 
+#### Composition analysis for broad cell types 
+sum <- table(pData(hiv_cds)$clusters, pData(hiv_cds)$condition)
+total<-table(pData(hiv_cds)$condition)
+# Normalize cell counts to total number of cells per treatment group
+sumtable_ptot <- t(apply(sum, 1, function(x) x/total))  
+sumtable_ptot <- melt(sumtable_ptot)
+colnames(sumtable_ptot)<-c("Cluster", "Condition","Proportion")
+sumtable_ptot$Condition <- factor(sumtable_ptot$Condition,levels = c("Healthy", "ART", "Intermediate", "Mild","Severe"))
+#Barplot
+ggplot(sumtable_ptot, aes(fill=factor(Cluster), y=Proportion, x=Condition)) + 
+  geom_bar(position="stack", stat="identity")+ggtitle("Cell Type Abundance") +labs(fill = "Group")+theme_minimal()
+
+### COMPOSITION PROFILE by patient
+#### Composition analysis for broad cell types 
+sum <- table(pData(hiv_cds)$clusters, pData(hiv_cds)$sample_id)
+total<-table(pData(hiv_cds)$sample_id )
+# Normalize cell counts to total number of cells per treatment group
+sumtable_ptot <- t(apply(sum, 1, function(x) x/total))  
+sumtable_ptot <- melt(sumtable_ptot)
+colnames(sumtable_ptot)<-c("Cluster", "sample_id","Proportion")
+#sumtable_ptot$Condition <- factor(sumtable_ptot$Condition,levels = c("Healthy", "ART", "Intermediate", "Mild","Severe"))
+#Barplot
+sumtable_ptot$condition <- pData(hiv_cds)$condition[match(sumtable_ptot$sample_id,pData(hiv_cds)$sample_id)]
+
+sumtable_ptot$condition <- factor(sumtable_ptot$condition, levels = c("Healthy","ART","Mild","Intermediate","Severe"))
+df <- sumtable_ptot[sumtable_ptot$Cluster == 1,]
+ggplot(df, aes(x=condition, y=Proportion    ,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.adj..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("Proportion") + ggtitle("Cluster 1")
+
+df <- sumtable_ptot[sumtable_ptot$Cluster == 2,]
+ggplot(df, aes(x=condition, y=Proportion    ,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.adj..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("Proportion") + ggtitle("Cluster 2")
+  
+df <- sumtable_ptot[sumtable_ptot$Cluster == 3,]
+ggplot(df, aes(x=condition, y=Proportion    ,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.adj..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("Proportion") + ggtitle("Cluster 3")
+
+
+df <- sumtable_ptot[sumtable_ptot$Cluster == 2,]
+my_comparisons <- combn(unique(as.character(df$condition)),2, simplify = FALSE)
+t_test_tooth <- compare_means(Proportion ~condition, comparisons = my_comparisons, p.adjust.method = "fdr", method='t.test', data = df)
+t_test_tooth <- t_test_tooth %>% mutate(y.position = rep(max(df$Proportion)+0.2, 10))
+ggplot(df, aes(x=condition, y=Proportion    ,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white")) + ggtitle("Cluster 2")+  stat_pvalue_manual(t_test_tooth, label = "p.signif", step.increase = 0.2)
+
+  
+save(hiv_cds,file = "hiv_cds_with_clustering.rda")
 
 plotCells(hiv_cds,"CD3","HIV CD3 Total","yes")
 plotCells(hiv_cds,"CD4","HIV CD4 Total","yes")
@@ -205,7 +263,7 @@ ggplot(pdataTc, aes(x=condition, y=pseudotime,color=condition)) +geom_violin(tri
 df <- aggregate(pseudotime ~ sample_id + condition + patient_id, data = pdataTc, FUN = mean)
 rownames(df) <- df$sample_id
 df$condition <- factor(df$condition, levels = c("Healthy","ART","Mild","Intermediate","Severe"))
-ggplot(df, aes(x=condition, y=pseudotime,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("Pseudotime Pattern Weight Mean")
+ggplot(df, aes(x=condition, y=pseudotime,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.adj..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("Pseudotime Pattern Weight Mean")
 
 pdataTc <- cbind(pdataTc,t(as.matrix(exprs(hiv_cds))))
 ### Plot overlayed fitted lines of pseudotime by expression 
@@ -229,52 +287,52 @@ colnames(gobj@featureLoadings) <- c("Naive","Pre-exhausted","Exhausted")
 colnames(FL) <-c("Naive","Pre-exhausted","Exhausted")
 colnames(pats) <-c("Naive","Pre-exhausted","Exhausted")
 save(gobj,file="metrics/gobj_hcc.rda")
-load("gobj_hcc.rda")
+load("./metrics/gobj_hcc.rda")
 pats <- data.frame(gobj@sampleFactors)
 
 plotNMF(hiv_cds,pats[,"Naive"],"HIV Projected Naive Pattern","yes")
 plotNMF(hiv_cds,pats[,"Pre-exhausted"],"HIV Projected Pre-exhausted Pattern","yes")
 plotNMF(hiv_cds,pats[,"Exhausted"],"HIV Projected Exhausted Pattern","yes")
 
-pdataTc <- cbind(pdataTc,pats)
+pdataTc <- cbind(data.frame(pData(hiv_cds),pats[intersect(rownames(pats),rownames(pData(hiv_cds))),]))
 
 # plot pseudotime by patient by condition
 df <- aggregate(Naive ~ sample_id + condition, data = pdataTc, FUN = mean)
 rownames(df) <- df$sample_id
 df$condition <- factor(df$condition, levels = c("Healthy","ART","Mild","Intermediate","Severe"))
-ggplot(df, aes(x=condition, y=Naive,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("Naive Pattern Weight Mean")
+ggplot(df, aes(x=condition, y=Naive,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.adj..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("Naive Pattern Weight Mean")
 
 df <- aggregate(`Pre-exhausted` ~ sample_id + condition, data = pdataTc, FUN = mean)
 rownames(df) <- df$sample_id
 df$condition <- factor(df$condition, levels = c("Healthy","ART","Mild","Intermediate","Severe"))
-ggplot(df, aes(x=condition, y=`Pre-exhausted`,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("Pre-exhaustion Pattern Weight Mean")
+ggplot(df, aes(x=condition, y=`Pre-exhausted`,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.adj..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("Pre-exhaustion Pattern Weight Mean")
 
 df <- aggregate(Exhausted ~ sample_id + condition, data = pdataTc, FUN = mean)
 rownames(df) <- df$sample_id
 df$condition <- factor(df$condition, levels = c("Healthy","ART","Mild","Intermediate","Severe"))
-ggplot(df, aes(x=condition, y=Exhausted,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("Exhaustion Pattern Weight Mean")
+ggplot(df, aes(x=condition, y=Exhausted,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.adj..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("Exhaustion Pattern Weight Mean")
 
 # Plot gene expression boxplots
 pdataTc <- cbind(pdataTc,t(as.matrix(exprs(hiv_cds))))
 df <- aggregate(TOX ~ sample_id + condition, data = pdataTc, FUN = mean)
 rownames(df) <- df$sample_id
 df$condition <- factor(df$condition, levels = c("Healthy","ART","Mild","Intermediate","Severe"))
-p1 <- ggplot(df, aes(x=condition, y=TOX,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("TOX Expression")
+p1 <- ggplot(df, aes(x=condition, y=TOX,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.adj..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("TOX Expression")
 
 df <- aggregate(Helios ~ sample_id + condition, data = pdataTc, FUN = mean)
 rownames(df) <- df$sample_id
 df$condition <- factor(df$condition, levels = c("Healthy","ART","Mild","Intermediate","Severe"))
-p2 <- ggplot(df, aes(x=condition, y=Helios,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("HELIOS Expression")
+p2 <- ggplot(df, aes(x=condition, y=Helios,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.adj..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("HELIOS Expression")
 
 df <- aggregate(PD_1 ~ sample_id + condition, data = pdataTc, FUN = mean)
 rownames(df) <- df$sample_id
 df$condition <- factor(df$condition, levels = c("Healthy","ART","Mild","Intermediate","Severe"))
-p3 <- ggplot(df, aes(x=condition, y=PD_1,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("PD-1 Expression")
+p3 <- ggplot(df, aes(x=condition, y=PD_1,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.adj..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("PD-1 Expression")
 
 df <- aggregate(CD28 ~ sample_id + condition, data = pdataTc, FUN = mean)
 rownames(df) <- df$sample_id
 df$condition <- factor(df$condition, levels = c("Healthy","ART","Mild","Intermediate","Severe"))
-p4 <- ggplot(df, aes(x=condition, y=CD28,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("CD28 Expression")
+p4 <- ggplot(df, aes(x=condition, y=CD28,color = condition))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.adj..),method="t.test",paired = FALSE,comparisons = combn(unique(as.character(df$condition)),2, simplify = FALSE),hide.ns=FALSE)+ylab("CD28 Expression")
 
 ```
 
@@ -426,12 +484,12 @@ ggplot(allTcDat, aes(x=`Effector Pattern`, y=as.numeric(survival),color=timepoin
 df <- aggregate(pseudotime ~ sample_id + conditions_timepoint + condition + timepoint + patient_id, data = allThDat, FUN = mean)
 rownames(df) <- df$sample_id
 
-ggplot(df, aes(x=timepoint, y=pseudotime, group = patient_id, color=condition))+geom_line(show.legend = T, aes(color=condition)) + stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = TRUE,comparisons = list(c("0wk", "7wk")))+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+scale_color_manual(values = c("Benefit" = "blue","NoBenefit"="red"))
+ggplot(df, aes(x=timepoint, y=pseudotime, group = patient_id, color=condition))+geom_line(show.legend = T, aes(color=condition)) + stat_compare_means(aes(label = ..p.adj..),method="t.test",paired = TRUE,comparisons = list(c("0wk", "7wk")))+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+scale_color_manual(values = c("Benefit" = "blue","NoBenefit"="red"))
 
 df <- aggregate(Memory ~ sample_id + conditions_timepoint + condition + timepoint + patient_id, data = allThDat, FUN = mean)
 rownames(df) <- df$sample_id
 
-ggplot(df, aes(x=conditions_timepoint, y=Memory, color=condition))+geom_boxplot() + geom_jitter(show.legend = T) + stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(df$conditions_timepoint),2, simplify = FALSE),hide.ns=TRUE)+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+scale_color_manual(values = c("Benefit" = "blue","NoBenefit"="red")) + ggtitle("Th Memory Pattern")
+ggplot(df, aes(x=conditions_timepoint, y=Memory, color=condition))+geom_boxplot() + geom_jitter(show.legend = T) + stat_compare_means(aes(label = ..p.adj..),method="t.test",paired = FALSE,comparisons = combn(unique(df$conditions_timepoint),2, simplify = FALSE),hide.ns=TRUE)+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+scale_color_manual(values = c("Benefit" = "blue","NoBenefit"="red")) + ggtitle("Th Memory Pattern")
 
 df <- aggregate(Effector ~ sample_id + conditions_timepoint + condition + timepoint + patient_id + survival, data = allThDat, FUN = mean)
 rownames(df) <- df$sample_id
@@ -452,14 +510,14 @@ coxph(Surv(Months) ~ Effector, data = pmat) %>% gtsummary::tbl_regression(exp = 
 df <- aggregate(Memory ~ sample_id + conditions_timepoint + condition + timepoint + patient_id, data = allTcDat, FUN = mean)
 rownames(df) <- df$sample_id
 
-ggplot(df, aes(x=conditions_timepoint, y=Memory, color=condition))+geom_boxplot() + geom_jitter(show.legend = T) + stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(df$conditions_timepoint),2, simplify = FALSE),hide.ns=TRUE)+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+scale_color_manual(values = c("Benefit" = "blue","NoBenefit"="red")) + ggtitle("Tc Memory")
+ggplot(df, aes(x=conditions_timepoint, y=Memory, color=condition))+geom_boxplot() + geom_jitter(show.legend = T) + stat_compare_means(aes(label = ..p.adj..),method="t.test",paired = FALSE,comparisons = combn(unique(df$conditions_timepoint),2, simplify = FALSE),hide.ns=TRUE)+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+scale_color_manual(values = c("Benefit" = "blue","NoBenefit"="red")) + ggtitle("Tc Memory")
 ```
 
 
 #### 3) HCC
 ```{r}
-load("C:/Users/sidir/OneDrive - Johns Hopkins/WON_RESEARCH/CYTOF_Metrics_Paper/paper_CDS_objects/HCC_cds.rda")
-setwd("C:/Users/sidir/OneDrive - Johns Hopkins/WON_RESEARCH/CYTOF_Metrics_Paper/figures/2_hcc_analysis")
+load("C:/Users/OneDrive - Johns Hopkins/WON_RESEARCH/CYTOF_Metrics_Paper/paper_CDS_objects/HCC_cds.rda")
+setwd("C:/Users/OneDrive - Johns Hopkins/WON_RESEARCH/CYTOF_Metrics_Paper/figures/2_hcc_analysis")
 
 plotCells(cds,"CD3","HCC CD3 Total","yes")
 plotCells(cds,"CD4","HCC CD4 Total","yes")
@@ -525,7 +583,7 @@ allTcDat$subset <- "HCC Tc"
 HCCdata <- rbind(allTcDat,allThDat)
 write.table(HCCdata,file="metrics/HCCdata_processed.txt")
 
-HCCdata <- read.table("C:/Users/sidir/OneDrive - Johns Hopkins/WON_RESEARCH/CYTOF_Metrics_Paper/metrics/HCCdata_processed.txt")
+HCCdata <- read.table("C:/Users/OneDrive - Johns Hopkins/WON_RESEARCH/CYTOF_Metrics_Paper/metrics/HCCdata_processed.txt")
 HCCdata$virustype_timepoint <- paste0(HCCdata$virustype, "_",HCCdata$timepoint)
 HCCdata$response_timepoint <- paste0(HCCdata$response, "_",HCCdata$timepoint)
 HCCdata[HCCdata$virustype == "HBV/HCV",]$virustype <- "HV_Untreated"
@@ -548,12 +606,11 @@ ggplot(df, aes(x=response, y=Effector, color=timepoint))+geom_boxplot()+geom_jit
 
 ggplot(df, aes(x=response, y=pseudotime, color=timepoint))+geom_boxplot()+geom_jitter(show.legend = T)+facet_wrap(~timepoint, nrow = 1, scales = 'free')+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(method="t.test",paired = FALSE,comparisons = combn(unique(df$response),2, simplify = FALSE),hide.ns=TRUE)
 
-
 # Plot Effector pattern in CD8 T cells
 df <- aggregate(Effector ~ sample_id + virustype + timepoint + response + patient_id + etiology, data = pdataTc, FUN = mean)
 rownames(df) <- df$sample_id
 
-ggplot(df, aes(x=etiology, y=Effector, color=etiology))+geom_boxplot()+geom_jitter(show.legend = T)+facet_wrap(~timepoint, nrow = 1, scales = 'free')+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..), method="t.test",paired = FALSE,comparisons = combn(unique(df$etiology),2, simplify = FALSE),hide.ns=TRUE)
+ggplot(df, aes(x=etiology, y=Effector, color=etiology))+geom_boxplot()+geom_jitter(show.legend = T)+facet_wrap(~timepoint, nrow = 1, scales = 'free')+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.adj..), method="t.test",paired = FALSE,comparisons = combn(unique(df$etiology),2, simplify = FALSE),hide.ns=TRUE)
 
 
 
@@ -593,9 +650,7 @@ rownames(df) <- df$sample_id
 
 ggplot(df[df$timepoint=="0wk",], aes(x=response, y=Memory_proj,color = response))+geom_boxplot()+geom_jitter(show.legend = T)+facet_wrap(~virustype, nrow = 1, scales = 'free')+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(method="t.test",paired = FALSE,comparisons = combn(unique(df$response),2, simplify = FALSE),hide.ns=TRUE)
 
-ggplot(df, aes(x=etiology, y=Effector_proj, color=etiology))+geom_boxplot()+geom_jitter(show.legend = T)+facet_wrap(~timepoint, nrow = 1, scales = 'free')+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..), method="t.test",paired = FALSE,comparisons = combn(unique(df$etiology),2, simplify = FALSE),hide.ns=TRUE)
-
-
+ggplot(df, aes(x=etiology, y=Effector_proj, color=etiology))+geom_boxplot()+geom_jitter(show.legend = T)+facet_wrap(~timepoint, nrow = 1, scales = 'free')+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.adj..), method="t.test",paired = FALSE,comparisons = combn(unique(df$etiology),2, simplify = FALSE),hide.ns=TRUE)
 
 ```
 
@@ -610,6 +665,8 @@ load("./paper_CDS_objects/hodi_Ipi_unstim.rda")
 
 cds<-reduce_dimension(cds)
 plot_cells(cds)
+
+plotCells(cds,"CCR7","HCC Tc","no")
 
 #####################################################
 ### projectR cogaps patterns from PDAC onto Melanoma:
@@ -637,7 +694,7 @@ pdatCD3CD4 <- pdat[pdat$CD4>3,]
 df <- aggregate(Memory_proj ~ sample_id + Response, data = pdatCD3CD8, FUN = mean)
 rownames(df) <- df$sample_id
 
-ggplot(df, aes(x=Response, y=Memory_proj,color = Response))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.signif..),method="t.test",paired = FALSE,comparisons = combn(unique(df$Response),2, simplify = FALSE),hide.ns=TRUE)
+ggplot(df, aes(x=Response, y=Memory_proj,color = Response))+geom_boxplot()+geom_jitter(show.legend = T)+theme_classic()+ theme(axis.text.x = element_text(size=8, angle = 45, hjust=1, vjust=1, color="black"),axis.title.x = element_blank(),axis.ticks=element_line(color="black"),axis.line.x = element_line(size=0.5), axis.line.y = element_line(size=0.5), axis.text.y = element_text(color="black"), strip.background = element_rect(fill=NA), strip.text = element_text(size=10), panel.background = element_rect(fill="white"),panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_blank(),legend.key.size = unit(1,'lines'),legend.text = element_text(size=10),legend.key = element_rect(fill="white"))+ stat_compare_means(aes(label = ..p.adj..),method="t.test",paired = FALSE,comparisons = combn(unique(df$Response),2, simplify = FALSE),hide.ns=TRUE)
 
 cdsCD8 <- cds[,rownames(pdatCD3CD8)]
 cdsCD8 <- reduce_dimension(cdsCD8)
@@ -645,7 +702,7 @@ plotNMF(cdsCD8,proj[colnames(cdsCD8),"Memory"],"Melanoma Projected Memory Patter
 
 save(cds,file="./paper_CDS_objects/hodi_Ipi_unstim_projected.rda")
 
-load("hodi_Ipi_unstim_projected.rda")
+load("./paper_CDS_objects/hodi_Ipi_unstim_projected.rda")
 
 pdat <- cbind(pData(cds),t(as.matrix(exprs(cds))))
 pdatCD3 <- pdat[pdat$CD3>3,]
@@ -669,24 +726,3 @@ colnames(FL) <- c("Naive","Memory","Effector")
 colnames(pats) <- c("Naive","Memory","Effector")
 save(gobj,file="metrics/gobj_melanoma.rda")
 ```
-
-#### 5) Rphenograph on HIV dataset
-```{r}
-library(Rphenograph)
-load("./paper_CDS_objects/CD8exh.rda")
-iris_unique <- unique(iris) # Remove duplicates
-#data <- as.matrix(iris_unique[,1:4])
-data <- t(as.matrix(counts(cds)))
-Rphenograph_out_100 <- Rphenograph(data, k = 100)
-Rphenograph_out_500 <- Rphenograph(data, k = 500)
-Rphenograph_out_1000 <- Rphenograph(data, k = 1000)
-Rphenograph_out_10000 <- Rphenograph(data, k = 10000)
-
-modularity(Rphenograph_out[[2]])
-membership(Rphenograph_out[[2]])
-iris_unique$phenograph_cluster <- factor(membership(Rphenograph_out[[2]]))
-ggplot(iris_unique, aes(x=Sepal.Length, y=Sepal.Width, col=Species, shape=phenograph_cluster)) + geom_point(size = 3)+theme_bw()
-```
-
-
-
